@@ -4,8 +4,10 @@ import {
   Check,
   CircleAlert,
   Copy,
+  DollarSign,
   Eye,
   EyeOff,
+  ExternalLink,
   FolderPlus,
   Gauge,
   KeyRound,
@@ -19,14 +21,18 @@ import {
   X,
 } from 'lucide-react';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { useTranslation } from 'react-i18next';
 import type { CodexAccount } from '../types/codex';
 import type { CodexAccountGroup } from '../services/codexAccountGroupService';
+import { fetchOpenAiPricingMarkdown } from '../services/codexLocalAccessService';
 import type {
   CodexLocalAccessApiKey,
   CodexLocalAccessRoutingStrategy,
   CodexLocalAccessState,
   CodexLocalAccessStatsWindow,
+  CodexLocalAccessUsageEvent,
+  CodexLocalAccessUsageStats,
 } from '../types/codexLocalAccess';
 import {
   getCodexPlanFilterKey,
@@ -101,8 +107,62 @@ type ApiKeyDraft = {
   enabled: boolean;
   monthlyTokenLimit: string;
 };
+type ModelPriceSource = 'builtin' | 'openai' | 'manual';
+type ModelPriceField =
+  | 'inputUsdPerMillion'
+  | 'cachedInputUsdPerMillion'
+  | 'outputUsdPerMillion';
+
+interface CodexModelPrice {
+  modelId: string;
+  inputUsdPerMillion: number | null;
+  cachedInputUsdPerMillion: number | null;
+  outputUsdPerMillion: number | null;
+  source: ModelPriceSource;
+  updatedAt: number;
+}
+
+interface CostEstimate {
+  usd: number;
+  unknownModelIds: string[];
+}
+
 const CODEX_LOCAL_ACCESS_STATS_RANGE_STORAGE_KEY =
   'agtools.codex.local_access.stats_range.v1';
+const CODEX_LOCAL_ACCESS_MODEL_PRICES_STORAGE_KEY =
+  'agtools.codex.local_access.model_prices.v1';
+const OPENAI_PRICING_SOURCE_URL = 'https://developers.openai.com/api/docs/pricing';
+const TOKEN_PRICE_DENOMINATOR = 1_000_000;
+const LEGACY_UNKNOWN_MODEL_PRICE_ID = 'unknown';
+
+const DEFAULT_MODEL_PRICES: CodexModelPrice[] = [
+  { modelId: LEGACY_UNKNOWN_MODEL_PRICE_ID, inputUsdPerMillion: 5, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 30, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5-codex', inputUsdPerMillion: 5, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 30, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5-codex-mini', inputUsdPerMillion: 0.75, cachedInputUsdPerMillion: 0.075, outputUsdPerMillion: 4.5, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.3-codex', inputUsdPerMillion: 2.5, cachedInputUsdPerMillion: 0.25, outputUsdPerMillion: 15, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.3-codex-spark', inputUsdPerMillion: 0.75, cachedInputUsdPerMillion: 0.075, outputUsdPerMillion: 4.5, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.2-codex', inputUsdPerMillion: 1.75, cachedInputUsdPerMillion: 0.175, outputUsdPerMillion: 14, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.1-codex-max', inputUsdPerMillion: 1.25, cachedInputUsdPerMillion: 0.125, outputUsdPerMillion: 10, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.1-codex-mini', inputUsdPerMillion: 0.25, cachedInputUsdPerMillion: 0.025, outputUsdPerMillion: 2, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.5', inputUsdPerMillion: 5, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 30, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.5-pro', inputUsdPerMillion: 30, cachedInputUsdPerMillion: null, outputUsdPerMillion: 180, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.4', inputUsdPerMillion: 2.5, cachedInputUsdPerMillion: 0.25, outputUsdPerMillion: 15, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.4-mini', inputUsdPerMillion: 0.75, cachedInputUsdPerMillion: 0.075, outputUsdPerMillion: 4.5, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.4-nano', inputUsdPerMillion: 0.2, cachedInputUsdPerMillion: 0.02, outputUsdPerMillion: 1.25, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.4-pro', inputUsdPerMillion: 30, cachedInputUsdPerMillion: null, outputUsdPerMillion: 180, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.2', inputUsdPerMillion: 1.75, cachedInputUsdPerMillion: 0.175, outputUsdPerMillion: 14, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.2-pro', inputUsdPerMillion: 21, cachedInputUsdPerMillion: null, outputUsdPerMillion: 168, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5.1', inputUsdPerMillion: 1.25, cachedInputUsdPerMillion: 0.125, outputUsdPerMillion: 10, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5', inputUsdPerMillion: 1.25, cachedInputUsdPerMillion: 0.125, outputUsdPerMillion: 10, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5-mini', inputUsdPerMillion: 0.25, cachedInputUsdPerMillion: 0.025, outputUsdPerMillion: 2, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5-nano', inputUsdPerMillion: 0.05, cachedInputUsdPerMillion: 0.005, outputUsdPerMillion: 0.4, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-5-pro', inputUsdPerMillion: 15, cachedInputUsdPerMillion: null, outputUsdPerMillion: 120, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-4.1', inputUsdPerMillion: 2, cachedInputUsdPerMillion: 0.5, outputUsdPerMillion: 8, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-4.1-mini', inputUsdPerMillion: 0.4, cachedInputUsdPerMillion: 0.1, outputUsdPerMillion: 1.6, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-4.1-nano', inputUsdPerMillion: 0.1, cachedInputUsdPerMillion: 0.025, outputUsdPerMillion: 0.4, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-4o', inputUsdPerMillion: 2.5, cachedInputUsdPerMillion: 1.25, outputUsdPerMillion: 10, source: 'builtin', updatedAt: 0 },
+  { modelId: 'gpt-4o-mini', inputUsdPerMillion: 0.15, cachedInputUsdPerMillion: 0.075, outputUsdPerMillion: 0.6, source: 'builtin', updatedAt: 0 },
+];
 
 function normalizeStatsRangeKey(value: string | null | undefined): StatsRangeKey {
   if (value === 'weekly' || value === 'monthly') {
@@ -125,6 +185,214 @@ function persistStatsRange(value: StatsRangeKey): void {
   } catch {
     // ignore storage write failures
   }
+}
+
+function normalizeModelPriceId(value: string): string {
+  return value
+    .trim()
+    .replace(/\s*\([^)]*\)\s*/g, '')
+    .toLowerCase();
+}
+
+function isDateSnapshotSuffix(value: string): boolean {
+  return /^-\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function normalizeNullablePrice(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === '-') return null;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeModelPrice(value: unknown): CodexModelPrice | null {
+  if (!value || typeof value !== 'object') return null;
+  const item = value as Partial<CodexModelPrice>;
+  const modelId = typeof item.modelId === 'string' ? item.modelId.trim() : '';
+  if (!modelId) return null;
+  const source: ModelPriceSource =
+    item.source === 'openai' || item.source === 'manual' || item.source === 'builtin'
+      ? item.source
+      : 'manual';
+  const updatedAt =
+    typeof item.updatedAt === 'number' && Number.isFinite(item.updatedAt) ? item.updatedAt : 0;
+
+  return {
+    modelId,
+    inputUsdPerMillion: normalizeNullablePrice(item.inputUsdPerMillion),
+    cachedInputUsdPerMillion: normalizeNullablePrice(item.cachedInputUsdPerMillion),
+    outputUsdPerMillion: normalizeNullablePrice(item.outputUsdPerMillion),
+    source,
+    updatedAt,
+  };
+}
+
+function mergeModelPrices(
+  basePrices: CodexModelPrice[],
+  overridePrices: CodexModelPrice[],
+): CodexModelPrice[] {
+  const next = new Map<string, CodexModelPrice>();
+  basePrices.forEach((price) => next.set(normalizeModelPriceId(price.modelId), price));
+  overridePrices.forEach((price) => next.set(normalizeModelPriceId(price.modelId), price));
+  return Array.from(next.values()).sort((left, right) =>
+    normalizeModelPriceId(left.modelId).localeCompare(normalizeModelPriceId(right.modelId)),
+  );
+}
+
+function readStoredModelPrices(): CodexModelPrice[] {
+  try {
+    const raw = localStorage.getItem(CODEX_LOCAL_ACCESS_MODEL_PRICES_STORAGE_KEY);
+    if (!raw) return [...DEFAULT_MODEL_PRICES];
+    const parsed = JSON.parse(raw) as unknown;
+    const source = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === 'object' && Array.isArray((parsed as { prices?: unknown }).prices)
+        ? (parsed as { prices: unknown[] }).prices
+        : [];
+    const storedPrices = source
+      .map(normalizeModelPrice)
+      .filter((price): price is CodexModelPrice => Boolean(price));
+    return mergeModelPrices(DEFAULT_MODEL_PRICES, storedPrices);
+  } catch {
+    return [...DEFAULT_MODEL_PRICES];
+  }
+}
+
+function persistModelPrices(prices: CodexModelPrice[]): void {
+  try {
+    localStorage.setItem(
+      CODEX_LOCAL_ACCESS_MODEL_PRICES_STORAGE_KEY,
+      JSON.stringify({ prices, updatedAt: Date.now() }),
+    );
+  } catch {
+    // ignore storage write failures
+  }
+}
+
+function parseOpenAiPricingCell(rawValue: string): number | null {
+  const value = rawValue.trim();
+  if (!value || value === 'null' || value === 'undefined') return null;
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return normalizeNullablePrice(value.slice(1, -1));
+  }
+  return normalizeNullablePrice(value);
+}
+
+function parseOpenAiPricingMarkdown(markdown: string): CodexModelPrice[] {
+  const standardStart = markdown.indexOf('data-value="standard"');
+  if (standardStart < 0) return [];
+  const nextPaneStart = markdown.indexOf('data-value="batch"', standardStart + 1);
+  const standardBlock =
+    nextPaneStart > standardStart ? markdown.slice(standardStart, nextPaneStart) : markdown.slice(standardStart);
+  const rowPattern =
+    /\[\s*"([^"]+)"\s*,\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^,\]]+)\s*\]/g;
+  const parsedAt = Date.now();
+  const prices: CodexModelPrice[] = [];
+  for (const match of standardBlock.matchAll(rowPattern)) {
+    const modelId = match[1].replace(/\s*\([^)]*\)\s*/g, '').trim();
+    if (!modelId) continue;
+    const inputUsdPerMillion = parseOpenAiPricingCell(match[2]);
+    const cachedInputUsdPerMillion = parseOpenAiPricingCell(match[3]);
+    const outputUsdPerMillion = parseOpenAiPricingCell(match[4]);
+    if (inputUsdPerMillion == null || outputUsdPerMillion == null) continue;
+    prices.push({
+      modelId,
+      inputUsdPerMillion,
+      cachedInputUsdPerMillion,
+      outputUsdPerMillion,
+      source: 'openai',
+      updatedAt: parsedAt,
+    });
+  }
+  return prices;
+}
+
+function resolveModelPrice(
+  modelId: string | undefined,
+  pricesByModelId: Map<string, CodexModelPrice>,
+): CodexModelPrice | null {
+  const normalized = normalizeModelPriceId(modelId || '');
+  if (!normalized) return null;
+  const exact = pricesByModelId.get(normalized);
+  if (exact) return exact;
+
+  const datedMatch = Array.from(pricesByModelId.keys())
+    .filter((candidate) => normalized.startsWith(`${candidate}-`))
+    .filter((candidate) => isDateSnapshotSuffix(normalized.slice(candidate.length)))
+    .sort((left, right) => right.length - left.length)[0];
+  return datedMatch ? pricesByModelId.get(datedMatch) ?? null : null;
+}
+
+function estimateEventsCost(
+  events: CodexLocalAccessUsageEvent[],
+  pricesByModelId: Map<string, CodexModelPrice>,
+): CostEstimate {
+  let usd = 0;
+  const unknownModels = new Set<string>();
+
+  events.forEach((event) => {
+    const inputTokens = Math.max(0, event.inputTokens || 0);
+    const cachedTokens = Math.min(inputTokens, Math.max(0, event.cachedTokens || 0));
+    const outputTokens = Math.max(event.outputTokens || 0, event.reasoningTokens || 0);
+    if (inputTokens === 0 && outputTokens === 0) return;
+
+    const modelPriceId = event.modelId?.trim() || LEGACY_UNKNOWN_MODEL_PRICE_ID;
+    const price = resolveModelPrice(modelPriceId, pricesByModelId);
+    if (price?.inputUsdPerMillion == null || price.outputUsdPerMillion == null) {
+      unknownModels.add(modelPriceId);
+      return;
+    }
+
+    const uncachedInputTokens = Math.max(0, inputTokens - cachedTokens);
+    const cachedInputPrice = price.cachedInputUsdPerMillion ?? price.inputUsdPerMillion;
+    usd +=
+      (uncachedInputTokens * price.inputUsdPerMillion +
+        cachedTokens * cachedInputPrice +
+        outputTokens * price.outputUsdPerMillion) /
+      TOKEN_PRICE_DENOMINATOR;
+  });
+
+  return {
+    usd,
+    unknownModelIds: Array.from(unknownModels).sort((left, right) => left.localeCompare(right)),
+  };
+}
+
+function estimateUsageStatsCost(
+  usage: CodexLocalAccessUsageStats | undefined,
+  pricesByModelId: Map<string, CodexModelPrice>,
+  modelId = LEGACY_UNKNOWN_MODEL_PRICE_ID,
+): CostEstimate {
+  if (!usage) {
+    return { usd: 0, unknownModelIds: [] };
+  }
+
+  return estimateEventsCost(
+    [
+      {
+        timestamp: 0,
+        modelId,
+        accountId: '',
+        email: '',
+        apiKeyId: '',
+        apiKeyName: '',
+        success: true,
+        latencyMs: 0,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        cachedTokens: usage.cachedTokens,
+        reasoningTokens: usage.reasoningTokens,
+      },
+    ],
+    pricesByModelId,
+  );
 }
 
 function formatCompactNumber(value: number): string {
@@ -152,6 +420,24 @@ function formatLocalDateTime(value: number | null | undefined): string {
   } catch {
     return '--';
   }
+}
+
+function formatUsd(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '$0.00';
+  if (value < 0.0001) return '$<0.0001';
+  return `$${value.toLocaleString('en-US', {
+    minimumFractionDigits: value < 1 ? 4 : 2,
+    maximumFractionDigits: value < 1 ? 4 : 2,
+  })}`;
+}
+
+function formatCostEstimate(estimate: CostEstimate): string {
+  if (estimate.unknownModelIds.length > 0 && estimate.usd <= 0) return '--';
+  return `${formatUsd(estimate.usd)}${estimate.unknownModelIds.length > 0 ? '+' : ''}`;
+}
+
+function formatPriceInputValue(value: number | null): string {
+  return value == null ? '' : String(value);
 }
 
 function formatApiKeyValue(apiKey: string, visible: boolean): string {
@@ -228,6 +514,9 @@ export function CodexLocalAccessModal({
   const [copiedField, setCopiedField] = useState<CopyableField | null>(null);
   const [selectedModelId, setSelectedModelId] = useState('');
   const [statsRange, setStatsRange] = useState<StatsRangeKey>(() => readStoredStatsRange());
+  const [modelPrices, setModelPrices] = useState<CodexModelPrice[]>(() => readStoredModelPrices());
+  const [pricingSyncing, setPricingSyncing] = useState(false);
+  const [pricingError, setPricingError] = useState('');
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -273,53 +562,6 @@ export function CodexLocalAccessModal({
       ? Math.round((selectedTotals.successCount / selectedTotals.requestCount) * 100)
       : 0;
   const actionBusy = saving || testing || starting || portCleanupBusy;
-  const summaryStats = useMemo(
-    () => [
-      {
-        key: 'requests',
-        label: t('codex.localAccess.stats.requests', '总请求数'),
-        value: formatCompactNumber(selectedTotals?.requestCount ?? 0),
-        detail: t('codex.localAccess.stats.requestsDetail', {
-          success: formatCompactNumber(selectedTotals?.successCount ?? 0),
-          failed: formatCompactNumber(selectedTotals?.failureCount ?? 0),
-          defaultValue: '成功 {{success}} / 失败 {{failed}}',
-        }),
-      },
-      {
-        key: 'tokens',
-        label: t('codex.localAccess.stats.tokens', '总 Token 数'),
-        value: formatCompactNumber(selectedTotals?.totalTokens ?? 0),
-        detail: t('codex.localAccess.stats.tokensDetail', {
-          input: formatCompactNumber(selectedTotals?.inputTokens ?? 0),
-          output: formatCompactNumber(selectedTotals?.outputTokens ?? 0),
-          defaultValue: '输入 {{input}} / 输出 {{output}}',
-        }),
-      },
-      {
-        key: 'specialTokens',
-        label: t('codex.localAccess.stats.specialTokens', '缓存 / 思考'),
-        value: formatCompactNumber(
-          (selectedTotals?.cachedTokens ?? 0) + (selectedTotals?.reasoningTokens ?? 0),
-        ),
-        detail: t('codex.localAccess.stats.specialTokensDetail', {
-          cached: formatCompactNumber(selectedTotals?.cachedTokens ?? 0),
-          reasoning: formatCompactNumber(selectedTotals?.reasoningTokens ?? 0),
-          defaultValue: '缓存 {{cached}} / 思考 {{reasoning}}',
-        }),
-      },
-      {
-        key: 'latency',
-        label: t('codex.localAccess.stats.avgLatency', '平均延迟'),
-        value: formatLatencyMs(avgLatencyMs),
-        detail: t('codex.localAccess.stats.successRate', {
-          rate: successRate,
-          defaultValue: '成功率 {{rate}}%',
-        }),
-      },
-    ],
-    [avgLatencyMs, selectedTotals, successRate, t],
-  );
-
   const oauthAccounts = useMemo(
     () => accounts.filter((account) => !isCodexApiKeyAccount(account)),
     [accounts],
@@ -383,6 +625,10 @@ export function CodexLocalAccessModal({
   useEffect(() => {
     persistStatsRange(statsRange);
   }, [statsRange]);
+
+  useEffect(() => {
+    persistModelPrices(modelPrices);
+  }, [modelPrices]);
 
   const normalizeTag = (value: string) => value.trim().toLowerCase();
 
@@ -625,6 +871,151 @@ export function CodexLocalAccessModal({
     return next;
   }, [stats?.monthly.apiKeys]);
 
+  const selectedUsageEvents = useMemo(() => {
+    const since = selectedStatsWindow?.since ?? 0;
+    return (stats?.events ?? []).filter((event) => event.timestamp >= since);
+  }, [selectedStatsWindow?.since, stats?.events]);
+
+  const pricesByModelId = useMemo(() => {
+    const next = new Map<string, CodexModelPrice>();
+    modelPrices.forEach((price) => {
+      const normalized = normalizeModelPriceId(price.modelId);
+      if (normalized) next.set(normalized, price);
+    });
+    return next;
+  }, [modelPrices]);
+
+  const modelPriceRows = useMemo(() => {
+    const seen = new Set<string>();
+    const rows: CodexModelPrice[] = [];
+    const append = (modelId: string, fallback?: CodexModelPrice) => {
+      const trimmed = modelId.trim();
+      const normalized = normalizeModelPriceId(trimmed);
+      if (!trimmed || seen.has(normalized)) return;
+      seen.add(normalized);
+      rows.push(
+        pricesByModelId.get(normalized) ??
+          fallback ?? {
+            modelId: trimmed,
+            inputUsdPerMillion: null,
+            cachedInputUsdPerMillion: null,
+            outputUsdPerMillion: null,
+            source: 'manual',
+            updatedAt: 0,
+          },
+      );
+    };
+
+    modelIds.forEach((modelId) => append(modelId));
+    selectedUsageEvents.forEach((event) => {
+      append(event.modelId?.trim() || LEGACY_UNKNOWN_MODEL_PRICE_ID);
+    });
+    if ((selectedTotals?.totalTokens ?? 0) > 0) {
+      append(LEGACY_UNKNOWN_MODEL_PRICE_ID);
+    }
+    modelPrices
+      .filter((price) => price.source === 'manual')
+      .forEach((price) => append(price.modelId, price));
+    if (rows.length === 0) {
+      DEFAULT_MODEL_PRICES.slice(0, 8).forEach((price) => append(price.modelId, price));
+    }
+    return rows.sort((left, right) =>
+      normalizeModelPriceId(left.modelId).localeCompare(normalizeModelPriceId(right.modelId)),
+    );
+  }, [modelIds, modelPrices, pricesByModelId, selectedTotals?.totalTokens, selectedUsageEvents]);
+
+  const costByApiKeyId = useMemo(() => {
+    const grouped = new Map<string, CodexLocalAccessUsageEvent[]>();
+    selectedUsageEvents.forEach((event) => {
+      if (!event.apiKeyId) return;
+      const current = grouped.get(event.apiKeyId) ?? [];
+      current.push(event);
+      grouped.set(event.apiKeyId, current);
+    });
+    const next = new Map<string, CostEstimate>();
+    grouped.forEach((events, apiKeyId) => next.set(apiKeyId, estimateEventsCost(events, pricesByModelId)));
+    return next;
+  }, [pricesByModelId, selectedUsageEvents]);
+
+  const costByAccountId = useMemo(() => {
+    const grouped = new Map<string, CodexLocalAccessUsageEvent[]>();
+    selectedUsageEvents.forEach((event) => {
+      if (!event.accountId) return;
+      const current = grouped.get(event.accountId) ?? [];
+      current.push(event);
+      grouped.set(event.accountId, current);
+    });
+    const next = new Map<string, CostEstimate>();
+    grouped.forEach((events, accountId) => next.set(accountId, estimateEventsCost(events, pricesByModelId)));
+    return next;
+  }, [pricesByModelId, selectedUsageEvents]);
+
+  const selectedTotalCost = useMemo(() => {
+    if (selectedUsageEvents.length > 0) {
+      return estimateEventsCost(selectedUsageEvents, pricesByModelId);
+    }
+    return estimateUsageStatsCost(selectedTotals, pricesByModelId);
+  }, [pricesByModelId, selectedTotals, selectedUsageEvents]);
+
+  const summaryStats = useMemo(
+    () => [
+      {
+        key: 'requests',
+        label: t('codex.localAccess.stats.requests', '总请求数'),
+        value: formatCompactNumber(selectedTotals?.requestCount ?? 0),
+        detail: t('codex.localAccess.stats.requestsDetail', {
+          success: formatCompactNumber(selectedTotals?.successCount ?? 0),
+          failed: formatCompactNumber(selectedTotals?.failureCount ?? 0),
+          defaultValue: '成功 {{success}} / 失败 {{failed}}',
+        }),
+      },
+      {
+        key: 'tokens',
+        label: t('codex.localAccess.stats.tokens', '总 Token 数'),
+        value: formatCompactNumber(selectedTotals?.totalTokens ?? 0),
+        detail: t('codex.localAccess.stats.tokensDetail', {
+          input: formatCompactNumber(selectedTotals?.inputTokens ?? 0),
+          output: formatCompactNumber(selectedTotals?.outputTokens ?? 0),
+          defaultValue: '输入 {{input}} / 输出 {{output}}',
+        }),
+      },
+      {
+        key: 'specialTokens',
+        label: t('codex.localAccess.stats.specialTokens', '缓存 / 思考'),
+        value: formatCompactNumber(
+          (selectedTotals?.cachedTokens ?? 0) + (selectedTotals?.reasoningTokens ?? 0),
+        ),
+        detail: t('codex.localAccess.stats.specialTokensDetail', {
+          cached: formatCompactNumber(selectedTotals?.cachedTokens ?? 0),
+          reasoning: formatCompactNumber(selectedTotals?.reasoningTokens ?? 0),
+          defaultValue: '缓存 {{cached}} / 思考 {{reasoning}}',
+        }),
+      },
+      {
+        key: 'cost',
+        label: t('codex.localAccess.stats.totalCost', '总费用'),
+        value: formatCostEstimate(selectedTotalCost),
+        detail:
+          selectedTotalCost.unknownModelIds.length > 0
+            ? t('codex.localAccess.pricing.unknownModels', {
+                models: selectedTotalCost.unknownModelIds.join(', '),
+                defaultValue: '未配置价格: {{models}}',
+              })
+            : t('codex.localAccess.pricing.estimatedWithCurrentPrices', '按当前价格估算'),
+      },
+      {
+        key: 'latency',
+        label: t('codex.localAccess.stats.avgLatency', '平均延迟'),
+        value: formatLatencyMs(avgLatencyMs),
+        detail: t('codex.localAccess.stats.successRate', {
+          rate: successRate,
+          defaultValue: '成功率 {{rate}}%',
+        }),
+      },
+    ],
+    [avgLatencyMs, selectedTotals, selectedTotalCost, successRate, t],
+  );
+
   const currentMemberStats = useMemo(() => {
     const currentIds = collection?.accountIds ?? [];
     return currentIds
@@ -730,6 +1121,75 @@ export function CodexLocalAccessModal({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+  };
+
+  const handleSyncOpenAiPricing = async () => {
+    setPricingSyncing(true);
+    setPricingError('');
+    setError('');
+    setNotice('');
+    try {
+      const markdown = await fetchOpenAiPricingMarkdown();
+      const parsedPrices = parseOpenAiPricingMarkdown(markdown);
+      if (parsedPrices.length === 0) {
+        throw new Error(t('codex.localAccess.pricing.syncNoPrices', '未从官方价格页解析到模型价格'));
+      }
+      setModelPrices((prev) => mergeModelPrices(prev, parsedPrices));
+      setNotice(
+        t('codex.localAccess.pricing.syncSuccess', {
+          count: parsedPrices.length,
+          defaultValue: '已同步 {{count}} 个官方模型价格',
+        }),
+      );
+    } catch (err) {
+      setPricingError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPricingSyncing(false);
+    }
+  };
+
+  const handleResetModelPrices = () => {
+    setPricingError('');
+    setModelPrices([...DEFAULT_MODEL_PRICES]);
+    setNotice(t('codex.localAccess.pricing.resetSuccess', '模型价格已重置为内置默认值'));
+  };
+
+  const handleOpenPricingSource = async () => {
+    try {
+      await openUrl(OPENAI_PRICING_SOURCE_URL);
+    } catch (err) {
+      setPricingError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const updateModelPrice = (
+    modelId: string,
+    field: ModelPriceField,
+    rawValue: string,
+  ) => {
+    const nextValue = normalizeNullablePrice(rawValue);
+    const normalized = normalizeModelPriceId(modelId);
+    if (!normalized) return;
+    setModelPrices((prev) => {
+      const map = new Map(prev.map((price) => [normalizeModelPriceId(price.modelId), price]));
+      const current = map.get(normalized) ?? {
+        modelId,
+        inputUsdPerMillion: null,
+        cachedInputUsdPerMillion: null,
+        outputUsdPerMillion: null,
+        source: 'manual' as const,
+        updatedAt: 0,
+      };
+      map.set(normalized, {
+        ...current,
+        [field]: nextValue,
+        source: 'manual',
+        updatedAt: Date.now(),
+      });
+      return Array.from(map.values()).sort((left, right) =>
+        normalizeModelPriceId(left.modelId).localeCompare(normalizeModelPriceId(right.modelId)),
+      );
+    });
   };
 
   const toggleSelectAllVisible = () => {
@@ -1570,6 +2030,108 @@ export function CodexLocalAccessModal({
                 ) : null}
               </section>
 
+              <section className="codex-local-access-section codex-local-access-section-surface codex-local-access-pricing-section">
+                <div className="codex-local-access-section-head">
+                  <div className="codex-local-access-section-title">
+                    <DollarSign size={16} />
+                    <span>{t('codex.localAccess.pricing.title', '费用估算')}</span>
+                  </div>
+                  <div className="codex-local-access-pricing-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => void handleSyncOpenAiPricing()}
+                      disabled={pricingSyncing}
+                    >
+                      <RefreshCw size={14} className={pricingSyncing ? 'loading-spinner' : ''} />
+                      {t('codex.localAccess.pricing.sync', '同步官方价格')}
+                    </button>
+                    <button
+                      type="button"
+                      className="folder-icon-btn"
+                      onClick={() => void handleOpenPricingSource()}
+                      title={t('codex.localAccess.pricing.openSource', '打开价格来源')}
+                      aria-label={t('codex.localAccess.pricing.openSource', '打开价格来源')}
+                    >
+                      <ExternalLink size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={handleResetModelPrices}
+                    >
+                      {t('codex.localAccess.pricing.reset', '重置')}
+                    </button>
+                  </div>
+                </div>
+                {pricingError && (
+                  <div className="codex-local-access-inline-error codex-local-access-pricing-error">
+                    <CircleAlert size={14} />
+                    <span>{pricingError}</span>
+                  </div>
+                )}
+                <div className="codex-local-access-pricing-table">
+                  <div className="codex-local-access-pricing-row codex-local-access-pricing-row-head">
+                    <span>{t('codex.localAccess.pricing.model', '模型')}</span>
+                    <span>{t('codex.localAccess.pricing.input', '输入 $/1M')}</span>
+                    <span>{t('codex.localAccess.pricing.cachedInput', '缓存 $/1M')}</span>
+                    <span>{t('codex.localAccess.pricing.output', '输出 $/1M')}</span>
+                    <span>{t('codex.localAccess.pricing.source', '来源')}</span>
+                  </div>
+                  {modelPriceRows.map((price) => {
+                    const sourceLabel =
+                      price.source === 'openai'
+                        ? t('codex.localAccess.pricing.sourceOpenAi', '官方')
+                        : price.source === 'builtin'
+                          ? t('codex.localAccess.pricing.sourceBuiltin', '内置')
+                          : t('codex.localAccess.pricing.sourceManual', '手动');
+                    return (
+                      <div key={price.modelId} className="codex-local-access-pricing-row">
+                        <code title={price.modelId}>{price.modelId}</code>
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.0001"
+                          value={formatPriceInputValue(price.inputUsdPerMillion)}
+                          onChange={(event) =>
+                            updateModelPrice(price.modelId, 'inputUsdPerMillion', event.target.value)
+                          }
+                          aria-label={`${price.modelId} ${t('codex.localAccess.pricing.input', '输入 $/1M')}`}
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.0001"
+                          value={formatPriceInputValue(price.cachedInputUsdPerMillion)}
+                          onChange={(event) =>
+                            updateModelPrice(
+                              price.modelId,
+                              'cachedInputUsdPerMillion',
+                              event.target.value,
+                            )
+                          }
+                          placeholder={t('codex.localAccess.pricing.sameAsInput', '同输入')}
+                          aria-label={`${price.modelId} ${t('codex.localAccess.pricing.cachedInput', '缓存 $/1M')}`}
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.0001"
+                          value={formatPriceInputValue(price.outputUsdPerMillion)}
+                          onChange={(event) =>
+                            updateModelPrice(price.modelId, 'outputUsdPerMillion', event.target.value)
+                          }
+                          aria-label={`${price.modelId} ${t('codex.localAccess.pricing.output', '输出 $/1M')}`}
+                        />
+                        <span className={`codex-local-access-pricing-source is-${price.source}`}>
+                          {sourceLabel}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+
               <section className="codex-local-access-section codex-local-access-section-surface codex-local-access-key-stats-section">
                 <div className="codex-local-access-section-title">
                   <KeyRound size={16} />
@@ -1583,6 +2145,9 @@ export function CodexLocalAccessModal({
                   ) : (
                     apiKeys.map((apiKey) => {
                       const keyStats = windowStatsByApiKeyId.get(apiKey.id)?.usage;
+                      const keyCost =
+                        costByApiKeyId.get(apiKey.id) ??
+                        estimateUsageStatsCost(keyStats, pricesByModelId);
                       const monthlyStats = monthlyStatsByApiKeyId.get(apiKey.id)?.usage;
                       const usedTokens = monthlyStats?.totalTokens ?? 0;
                       const limit = apiKey.monthlyTokenLimit;
@@ -1611,10 +2176,22 @@ export function CodexLocalAccessModal({
                             <div className="codex-local-access-account-stat-block codex-local-access-account-stat-block-metrics">
                               <div className="codex-local-access-account-stat-metrics">
                                 <span className="codex-local-access-account-stat-pill">
+                                  {t('codex.localAccess.stats.accountRequestsCompact', {
+                                    value: formatCompactNumber(keyStats?.requestCount ?? 0),
+                                    defaultValue: '请求 {{value}}',
+                                  })}
+                                </span>
+                                <span className="codex-local-access-account-stat-pill">
                                   {t('codex.localAccess.stats.accountResult', {
                                     success: keyStats?.successCount ?? 0,
                                     failed: keyStats?.failureCount ?? 0,
                                     defaultValue: '成功 {{success}} / 失败 {{failed}}',
+                                  })}
+                                </span>
+                                <span className="codex-local-access-account-stat-pill">
+                                  {t('codex.localAccess.stats.totalTokensCompact', {
+                                    value: formatCompactNumber(keyStats?.totalTokens ?? 0),
+                                    defaultValue: '总 {{value}}',
                                   })}
                                 </span>
                                 <span className="codex-local-access-account-stat-pill">
@@ -1625,9 +2202,26 @@ export function CodexLocalAccessModal({
                                   })}
                                 </span>
                                 <span className="codex-local-access-account-stat-pill">
-                                  {t('codex.localAccess.stats.accountTokensCompact', {
-                                    value: formatCompactNumber(keyStats?.totalTokens ?? 0),
-                                    defaultValue: '{{value}}',
+                                  {t('codex.localAccess.stats.specialTokensDetail', {
+                                    cached: formatCompactNumber(keyStats?.cachedTokens ?? 0),
+                                    reasoning: formatCompactNumber(keyStats?.reasoningTokens ?? 0),
+                                    defaultValue: '缓存 {{cached}} / 思考 {{reasoning}}',
+                                  })}
+                                </span>
+                                <span
+                                  className="codex-local-access-account-stat-pill codex-local-access-cost-pill"
+                                  title={
+                                    keyCost.unknownModelIds.length > 0
+                                      ? t('codex.localAccess.pricing.unknownModels', {
+                                          models: keyCost.unknownModelIds.join(', '),
+                                          defaultValue: '未配置价格: {{models}}',
+                                        })
+                                      : undefined
+                                  }
+                                >
+                                  {t('codex.localAccess.pricing.costPill', {
+                                    cost: formatCostEstimate(keyCost),
+                                    defaultValue: '费用 {{cost}}',
                                   })}
                                 </span>
                                 <span className="codex-local-access-account-stat-pill">
@@ -1659,48 +2253,84 @@ export function CodexLocalAccessModal({
                       {t('codex.localAccess.statsEmpty', '当前还没有统计数据')}
                     </div>
                   ) : (
-                    currentMemberStats.map(({ account, presentation, stats: accountStats }) => (
-                      <div key={account.id} className="codex-local-access-account-stat-row">
-                        <div className="codex-local-access-account-stat-top">
-                          <div className="codex-local-access-account-stat-main">
-                            <span
-                              className="group-account-email"
-                              title={maskAccountText(presentation.displayName)}
-                            >
-                              {maskAccountText(presentation.displayName)}
-                            </span>
-                            <span className={`tier-badge ${presentation.planClass}`}>
-                              {presentation.planLabel}
-                            </span>
-                          </div>
-                          <div className="codex-local-access-account-stat-block codex-local-access-account-stat-block-quota">
-                            {renderQuotaPreview(presentation, 3)}
-                          </div>
-                          <div className="codex-local-access-account-stat-block codex-local-access-account-stat-block-metrics">
-                            <div className="codex-local-access-account-stat-metrics">
-                              <span className="codex-local-access-account-stat-pill">
-                                {t('codex.localAccess.stats.accountResult', {
-                                  success: accountStats?.successCount ?? 0,
-                                  failed: accountStats?.failureCount ?? 0,
-                                  defaultValue: '成功 {{success}} / 失败 {{failed}}',
-                                })}
+                    currentMemberStats.map(({ account, presentation, stats: accountStats }) => {
+                      const accountCost =
+                        costByAccountId.get(account.id) ??
+                        estimateUsageStatsCost(accountStats ?? undefined, pricesByModelId);
+                      return (
+                        <div key={account.id} className="codex-local-access-account-stat-row">
+                          <div className="codex-local-access-account-stat-top">
+                            <div className="codex-local-access-account-stat-main">
+                              <span
+                                className="group-account-email"
+                                title={maskAccountText(presentation.displayName)}
+                              >
+                                {maskAccountText(presentation.displayName)}
                               </span>
-                              <span className="codex-local-access-account-stat-pill">
-                                {(accountStats?.totalTokens ?? 0) === 0
-                                  ? t('codex.localAccess.stats.accountTokens', {
-                                      count: 0,
-                                      defaultValue: '0 Tokens',
-                                    })
-                                  : t('codex.localAccess.stats.accountTokensCompact', {
-                                      value: formatCompactNumber(accountStats?.totalTokens ?? 0),
-                                      defaultValue: '{{value}}',
-                                    })}
+                              <span className={`tier-badge ${presentation.planClass}`}>
+                                {presentation.planLabel}
                               </span>
+                            </div>
+                            <div className="codex-local-access-account-stat-block codex-local-access-account-stat-block-quota">
+                              {renderQuotaPreview(presentation, 3)}
+                            </div>
+                            <div className="codex-local-access-account-stat-block codex-local-access-account-stat-block-metrics">
+                              <div className="codex-local-access-account-stat-metrics">
+                                <span className="codex-local-access-account-stat-pill">
+                                  {t('codex.localAccess.stats.accountRequestsCompact', {
+                                    value: formatCompactNumber(accountStats?.requestCount ?? 0),
+                                    defaultValue: '请求 {{value}}',
+                                  })}
+                                </span>
+                                <span className="codex-local-access-account-stat-pill">
+                                  {t('codex.localAccess.stats.accountResult', {
+                                    success: accountStats?.successCount ?? 0,
+                                    failed: accountStats?.failureCount ?? 0,
+                                    defaultValue: '成功 {{success}} / 失败 {{failed}}',
+                                  })}
+                                </span>
+                                <span className="codex-local-access-account-stat-pill">
+                                  {t('codex.localAccess.stats.totalTokensCompact', {
+                                    value: formatCompactNumber(accountStats?.totalTokens ?? 0),
+                                    defaultValue: '总 {{value}}',
+                                  })}
+                                </span>
+                                <span className="codex-local-access-account-stat-pill">
+                                  {t('codex.localAccess.stats.tokensDetail', {
+                                    input: formatCompactNumber(accountStats?.inputTokens ?? 0),
+                                    output: formatCompactNumber(accountStats?.outputTokens ?? 0),
+                                    defaultValue: '输入 {{input}} / 输出 {{output}}',
+                                  })}
+                                </span>
+                                <span className="codex-local-access-account-stat-pill">
+                                  {t('codex.localAccess.stats.specialTokensDetail', {
+                                    cached: formatCompactNumber(accountStats?.cachedTokens ?? 0),
+                                    reasoning: formatCompactNumber(accountStats?.reasoningTokens ?? 0),
+                                    defaultValue: '缓存 {{cached}} / 思考 {{reasoning}}',
+                                  })}
+                                </span>
+                                <span
+                                  className="codex-local-access-account-stat-pill codex-local-access-cost-pill"
+                                  title={
+                                    accountCost.unknownModelIds.length > 0
+                                      ? t('codex.localAccess.pricing.unknownModels', {
+                                          models: accountCost.unknownModelIds.join(', '),
+                                          defaultValue: '未配置价格: {{models}}',
+                                        })
+                                      : undefined
+                                  }
+                                >
+                                  {t('codex.localAccess.pricing.costPill', {
+                                    cost: formatCostEstimate(accountCost),
+                                    defaultValue: '费用 {{cost}}',
+                                  })}
+                                </span>
+                              </div>
                             </div>
                           </div>
                         </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </section>

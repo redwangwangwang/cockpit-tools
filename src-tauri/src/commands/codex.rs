@@ -658,6 +658,7 @@ pub async fn codex_wakeup_run_enabled_tasks(
 
 const CODEX_GROUPS_FILE: &str = "codex_account_groups.json";
 const CODEX_MODEL_PROVIDERS_FILE: &str = "codex_model_providers.json";
+const OPENAI_PRICING_MARKDOWN_URL: &str = "https://developers.openai.com/api/docs/pricing.md";
 
 #[tauri::command]
 pub async fn load_codex_account_groups() -> Result<String, String> {
@@ -705,6 +706,32 @@ pub async fn save_codex_model_providers(data: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn codex_local_access_fetch_openai_pricing_markdown() -> Result<String, String> {
+    let response = reqwest::Client::new()
+        .get(OPENAI_PRICING_MARKDOWN_URL)
+        .header(reqwest::header::USER_AGENT, "Cockpit Tools pricing sync")
+        .header(
+            reqwest::header::ACCEPT,
+            "text/markdown,text/plain,text/*,*/*",
+        )
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch OpenAI pricing: {}", e))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("OpenAI pricing returned HTTP {}", status.as_u16()));
+    }
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read OpenAI pricing: {}", e))?;
+    if !text.contains("TextTokenPricingTables") {
+        return Err("OpenAI pricing response did not include token pricing tables".to_string());
+    }
+    Ok(text)
+}
+
+#[tauri::command]
 pub async fn codex_local_access_get_state() -> Result<CodexLocalAccessState, String> {
     codex_local_access::get_local_access_state().await
 }
@@ -743,13 +770,8 @@ pub async fn codex_local_access_update_api_key(
     enabled: bool,
     monthly_token_limit: Option<u64>,
 ) -> Result<CodexLocalAccessState, String> {
-    codex_local_access::update_local_access_api_key(
-        api_key_id,
-        name,
-        enabled,
-        monthly_token_limit,
-    )
-    .await
+    codex_local_access::update_local_access_api_key(api_key_id, name, enabled, monthly_token_limit)
+        .await
 }
 
 #[tauri::command]

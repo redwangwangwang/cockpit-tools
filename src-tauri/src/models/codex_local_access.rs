@@ -135,6 +135,8 @@ pub struct CodexLocalAccessUsageEvent {
     #[serde(default)]
     pub timestamp: i64,
     #[serde(default)]
+    pub model_id: String,
+    #[serde(default)]
     pub account_id: String,
     #[serde(default)]
     pub email: String,

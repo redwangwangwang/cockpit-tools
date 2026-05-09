@@ -59,6 +59,22 @@ export interface CodexLocalAccessApiKeyStats {
   updatedAt: number;
 }
 
+export interface CodexLocalAccessUsageEvent {
+  timestamp: number;
+  modelId: string;
+  accountId: string;
+  email: string;
+  apiKeyId: string;
+  apiKeyName: string;
+  success: boolean;
+  latencyMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedTokens: number;
+  reasoningTokens: number;
+}
+
 export interface CodexLocalAccessStatsWindow {
   since: number;
   updatedAt: number;
@@ -76,6 +92,7 @@ export interface CodexLocalAccessStats {
   daily: CodexLocalAccessStatsWindow;
   weekly: CodexLocalAccessStatsWindow;
   monthly: CodexLocalAccessStatsWindow;
+  events: CodexLocalAccessUsageEvent[];
 }
 
 export interface CodexLocalAccessState {

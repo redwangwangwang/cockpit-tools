@@ -1019,6 +1019,18 @@ fn build_request_routing_hint(request: &ParsedRequest) -> RequestRoutingHint {
     }
 }
 
+fn extract_request_model_id(request: &ParsedRequest) -> String {
+    parse_request_body_json(&request.body)
+        .and_then(|body| {
+            body.get("model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(resolve_supported_model_alias)
+        })
+        .unwrap_or_default()
+}
+
 fn is_chat_completions_request(target: &str) -> bool {
     let path = target.split('?').next().unwrap_or(target).trim();
     path == CHAT_COMPLETIONS_PATH || path.ends_with("/chat/completions")
@@ -2639,6 +2651,7 @@ fn trim_recent_events(events: &mut Vec<CodexLocalAccessUsageEvent>, month_since:
 fn append_usage_event(
     events: &mut Vec<CodexLocalAccessUsageEvent>,
     now: i64,
+    model_id: Option<&str>,
     account_id: Option<&str>,
     account_email: Option<&str>,
     api_key_id: Option<&str>,
@@ -2650,6 +2663,7 @@ fn append_usage_event(
     let usage = usage.cloned().unwrap_or_default();
     events.push(CodexLocalAccessUsageEvent {
         timestamp: now,
+        model_id: model_id.unwrap_or_default().trim().to_string(),
         account_id: account_id.unwrap_or_default().trim().to_string(),
         email: account_email.unwrap_or_default().trim().to_string(),
         api_key_id: api_key_id.unwrap_or_default().trim().to_string(),
@@ -2832,7 +2846,9 @@ fn new_default_collection() -> Result<CodexLocalAccessCollection, String> {
     })
 }
 
-fn first_enabled_api_key(collection: &CodexLocalAccessCollection) -> Option<&CodexLocalAccessApiKey> {
+fn first_enabled_api_key(
+    collection: &CodexLocalAccessCollection,
+) -> Option<&CodexLocalAccessApiKey> {
     collection
         .api_keys
         .iter()
@@ -3504,6 +3520,7 @@ fn upsert_api_key_usage_stats(
 }
 
 async fn record_request_stats(
+    model_id: Option<&str>,
     account_id: Option<&str>,
     account_email: Option<&str>,
     api_key_id: Option<&str>,
@@ -3542,6 +3559,7 @@ async fn record_request_stats(
         append_usage_event(
             &mut runtime.stats.events,
             now,
+            model_id,
             account_id,
             account_email,
             api_key_id,
@@ -4307,9 +4325,7 @@ fn extract_usage_capture(value: &Value) -> Option<UsageCapture> {
         input_tokens,
         output_tokens,
         total_tokens: if explicit_total_tokens.unwrap_or(0) == 0 {
-            input_tokens
-                .saturating_add(output_tokens)
-                .saturating_add(reasoning_tokens)
+            input_tokens.saturating_add(output_tokens.max(reasoning_tokens))
         } else {
             explicit_total_tokens.unwrap_or(0)
         },
@@ -5958,6 +5974,7 @@ async fn handle_connection(
     touch_local_access_api_key(&validated_api_key.id).await;
 
     let started_at = Instant::now();
+    let requested_model_id = extract_request_model_id(&parsed);
     if is_api_key_over_monthly_limit(&state.stats, &validated_api_key) {
         write_json_error_response(
             &mut stream,
@@ -5972,6 +5989,7 @@ async fn handle_connection(
         )
         .await?;
         if let Err(err) = record_request_stats(
+            Some(requested_model_id.as_str()),
             None,
             None,
             Some(validated_api_key.id.as_str()),
@@ -6033,6 +6051,12 @@ async fn handle_connection(
             return Ok(());
         }
     };
+    let prepared_model_id = extract_request_model_id(&prepared_request);
+    let stats_model_id = if prepared_model_id.trim().is_empty() {
+        requested_model_id.as_str()
+    } else {
+        prepared_model_id.as_str()
+    };
 
     match proxy_request_with_account_pool(&prepared_request, &collection).await {
         Ok(success) => {
@@ -6043,6 +6067,7 @@ async fn handle_connection(
             }
             let latency_ms = started_at.elapsed().as_millis() as u64;
             if let Err(err) = record_request_stats(
+                Some(stats_model_id),
                 Some(success.account_id.as_str()),
                 Some(success.account_email.as_str()),
                 Some(validated_api_key.id.as_str()),
@@ -6092,6 +6117,7 @@ async fn handle_connection(
                 .await
                 .map_err(|e| format!("写入错误响应失败: {}", e));
             if let Err(err) = record_request_stats(
+                Some(stats_model_id),
                 account_id.as_deref(),
                 account_email.as_deref(),
                 Some(validated_api_key.id.as_str()),
@@ -6207,7 +6233,25 @@ mod tests {
         assert_eq!(usage.output_tokens, 4);
         assert_eq!(usage.cached_tokens, 1);
         assert_eq!(usage.reasoning_tokens, 2);
-        assert_eq!(usage.total_tokens, 14);
+        assert_eq!(usage.total_tokens, 12);
+    }
+
+    #[test]
+    fn usage_fallback_counts_reasoning_when_output_tokens_are_missing() {
+        let payload = json!({
+            "usage": {
+                "prompt_tokens": 8,
+                "completion_tokens_details": {
+                    "reasoning_tokens": 2
+                }
+            }
+        });
+
+        let usage = extract_usage_capture(&payload).expect("usage should be parsed");
+        assert_eq!(usage.input_tokens, 8);
+        assert_eq!(usage.output_tokens, 0);
+        assert_eq!(usage.reasoning_tokens, 2);
+        assert_eq!(usage.total_tokens, 10);
     }
 
     #[test]
@@ -6259,7 +6303,10 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         .expect("legacy collection should parse");
 
         assert!(collection.api_keys.is_empty());
-        assert_eq!(collection.legacy_api_key.as_deref(), Some("agt_codex_legacy"));
+        assert_eq!(
+            collection.legacy_api_key.as_deref(),
+            Some("agt_codex_legacy")
+        );
         assert!(sanitize_collection_api_keys(&mut collection));
         assert_eq!(collection.api_keys.len(), 1);
         assert_eq!(collection.api_keys[0].name, "Default");
@@ -6280,8 +6327,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             test_api_key("key-b", "Bob", "agt_codex_b", false),
         ]);
 
-        let matched = find_enabled_api_key(&collection, "agt_codex_a")
-            .expect("enabled key should match");
+        let matched =
+            find_enabled_api_key(&collection, "agt_codex_a").expect("enabled key should match");
         assert_eq!(matched.id, "key-a");
         assert!(find_enabled_api_key(&collection, "agt_codex_b").is_none());
         assert!(find_enabled_api_key(&collection, "agt_codex_missing").is_none());
@@ -6303,6 +6350,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         append_usage_event(
             &mut stats.events,
             now,
+            Some("gpt-5.4-mini"),
             Some("acc-1"),
             Some("alice@example.com"),
             Some(api_key.id.as_str()),
@@ -6334,6 +6382,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         append_usage_event(
             &mut stats.events,
             now,
+            Some("gpt-5.4-mini"),
             Some("acc-1"),
             Some("alice@example.com"),
             Some("key-a"),
@@ -6353,6 +6402,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(stats.monthly.api_keys[0].api_key_id, "key-a");
         assert_eq!(stats.monthly.api_keys[0].api_key_name, "Alice");
         assert_eq!(stats.monthly.api_keys[0].usage.output_tokens, 3);
+        assert_eq!(stats.events[0].model_id, "gpt-5.4-mini");
     }
 
     #[test]
