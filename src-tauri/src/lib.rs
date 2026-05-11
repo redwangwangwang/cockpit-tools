@@ -482,6 +482,7 @@ pub fn run() {
             commands::codex::codex_local_access_remove_account,
             commands::codex::codex_local_access_create_api_key,
             commands::codex::codex_local_access_update_api_key,
+            commands::codex::codex_local_access_set_default_api_key,
             commands::codex::codex_local_access_rotate_api_key,
             commands::codex::codex_local_access_delete_api_key,
             commands::codex::codex_local_access_clear_stats,

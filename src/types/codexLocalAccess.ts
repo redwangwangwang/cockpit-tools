@@ -12,6 +12,7 @@ export interface CodexLocalAccessApiKey {
   key: string;
   enabled: boolean;
   monthlyTokenLimit: number | null;
+  allowedAccountIds: string[] | null;
   createdAt: number;
   updatedAt: number;
   lastUsedAt: number | null;
@@ -21,6 +22,7 @@ export interface CodexLocalAccessCollection {
   enabled: boolean;
   port: number;
   apiKeys: CodexLocalAccessApiKey[];
+  defaultApiKeyId: string | null;
   routingStrategy: CodexLocalAccessRoutingStrategy;
   restrictFreeAccounts: boolean;
   accountIds: string[];
@@ -31,6 +33,8 @@ export interface CodexLocalAccessCollection {
 export interface CodexLocalAccessApiKeyInput {
   name: string;
   monthlyTokenLimit: number | null;
+  upstreamScope: 'all' | 'selected';
+  allowedAccountIds: string[];
 }
 
 export interface CodexLocalAccessUsageStats {
@@ -48,6 +52,9 @@ export interface CodexLocalAccessUsageStats {
 export interface CodexLocalAccessAccountStats {
   accountId: string;
   email: string;
+  sourceType?: string;
+  providerName?: string | null;
+  baseUrlHost?: string | null;
   usage: CodexLocalAccessUsageStats;
   updatedAt: number;
 }
@@ -64,6 +71,9 @@ export interface CodexLocalAccessUsageEvent {
   modelId: string;
   accountId: string;
   email: string;
+  sourceType?: string;
+  providerName?: string | null;
+  baseUrlHost?: string | null;
   apiKeyId: string;
   apiKeyName: string;
   success: boolean;
@@ -95,6 +105,17 @@ export interface CodexLocalAccessStats {
   events: CodexLocalAccessUsageEvent[];
 }
 
+export interface CodexLocalAccessUpstreamSource {
+  accountId: string;
+  email: string;
+  sourceType: string;
+  providerName: string | null;
+  baseUrlHost: string | null;
+  selected: boolean;
+  eligible: boolean;
+  disabledReason: string | null;
+}
+
 export interface CodexLocalAccessState {
   collection: CodexLocalAccessCollection | null;
   running: boolean;
@@ -103,6 +124,7 @@ export interface CodexLocalAccessState {
   modelIds: string[];
   lastError: string | null;
   memberCount: number;
+  upstreamSources: CodexLocalAccessUpstreamSource[];
   stats: CodexLocalAccessStats;
 }
 

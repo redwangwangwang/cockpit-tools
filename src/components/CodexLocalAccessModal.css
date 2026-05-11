@@ -954,6 +954,108 @@
   color: var(--text-secondary);
 }
 
+.codex-local-access-api-key-meta span.warning {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+.codex-local-access-api-key-meta span.default {
+  background: color-mix(in srgb, var(--primary) 13%, transparent);
+  color: var(--primary);
+}
+
+.codex-local-access-api-key-upstreams {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(248, 250, 252, 0.58);
+}
+
+.codex-local-access-api-key-upstreams-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.codex-local-access-api-key-scope-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.codex-local-access-api-key-scope-toggle button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid rgba(148, 163, 184, 0.14);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.codex-local-access-api-key-scope-toggle button:last-child {
+  border-right: 0;
+}
+
+.codex-local-access-api-key-scope-toggle button.is-active {
+  background: color-mix(in srgb, var(--primary) 12%, rgba(255, 255, 255, 0.9));
+  color: var(--primary);
+}
+
+.codex-local-access-api-key-scope-toggle button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.codex-local-access-api-key-upstream-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 6px;
+  max-height: 150px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.codex-local-access-api-key-upstream-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.codex-local-access-api-key-upstream-item input {
+  flex: 0 0 auto;
+}
+
+.codex-local-access-api-key-upstream-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .codex-local-access-api-key-actions {
   display: flex;
   align-items: flex-start;
@@ -976,6 +1078,26 @@
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.codex-local-access-default-key-badge,
+.codex-local-access-default-key-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  white-space: nowrap;
+}
+
+.codex-local-access-default-key-badge {
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .codex-local-access-danger-icon {
@@ -1729,8 +1851,10 @@
 [data-theme="dark"] .codex-local-access-section-surface,
 [data-theme="dark"] .codex-local-access-config-card,
 [data-theme="dark"] .codex-local-access-api-key-row,
+[data-theme="dark"] .codex-local-access-api-key-upstreams,
 [data-theme="dark"] .codex-local-access-account-stat-row,
 [data-theme="dark"] .codex-local-access-stat-card,
+[data-theme="dark"] .codex-local-access-api-key-upstream-item,
 [data-theme="dark"] .codex-local-access-member-section .group-account-item,
 [data-theme="dark"] .codex-local-access-member-section .group-account-item.group-account-item-header {
   background:
@@ -1796,4 +1920,18 @@
 [data-theme="dark"] .codex-local-access-panel-grid .group-account-empty {
   background: rgba(15, 23, 42, 0.42);
   border-color: rgba(148, 163, 184, 0.16);
+}
+
+[data-theme="dark"] .codex-local-access-api-key-scope-toggle {
+  background: rgba(15, 23, 42, 0.74);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+[data-theme="dark"] .codex-local-access-api-key-scope-toggle button {
+  border-right-color: rgba(148, 163, 184, 0.16);
+}
+
+[data-theme="dark"] .codex-local-access-api-key-scope-toggle button.is-active {
+  background: rgba(30, 64, 175, 0.28);
+  color: #bfdbfe;
 }
