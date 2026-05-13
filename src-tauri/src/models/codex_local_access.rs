@@ -39,6 +39,8 @@ pub struct CodexLocalAccessApiKey {
     #[serde(default)]
     pub monthly_token_limit: Option<u64>,
     #[serde(default)]
+    pub allowed_account_ids: Option<Vec<String>>,
+    #[serde(default)]
     pub created_at: i64,
     #[serde(default)]
     pub updated_at: i64,
@@ -55,6 +57,8 @@ pub struct CodexLocalAccessCollection {
     pub port: u16,
     #[serde(default)]
     pub api_keys: Vec<CodexLocalAccessApiKey>,
+    #[serde(default)]
+    pub default_api_key_id: Option<String>,
     #[serde(default, rename = "apiKey", skip_serializing)]
     pub legacy_api_key: Option<String>,
     #[serde(default)]
@@ -97,6 +101,12 @@ pub struct CodexLocalAccessUsageStats {
 pub struct CodexLocalAccessAccountStats {
     pub account_id: String,
     pub email: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url_host: Option<String>,
     #[serde(default)]
     pub usage: CodexLocalAccessUsageStats,
     #[serde(default)]
@@ -140,6 +150,12 @@ pub struct CodexLocalAccessUsageEvent {
     pub account_id: String,
     #[serde(default)]
     pub email: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url_host: Option<String>,
     #[serde(default)]
     pub api_key_id: String,
     #[serde(default)]
@@ -183,6 +199,27 @@ pub struct CodexLocalAccessStats {
     pub events: Vec<CodexLocalAccessUsageEvent>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessUpstreamSource {
+    #[serde(default)]
+    pub account_id: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub source_type: String,
+    #[serde(default)]
+    pub provider_name: Option<String>,
+    #[serde(default)]
+    pub base_url_host: Option<String>,
+    #[serde(default)]
+    pub selected: bool,
+    #[serde(default)]
+    pub eligible: bool,
+    #[serde(default)]
+    pub disabled_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexLocalAccessState {
@@ -193,6 +230,7 @@ pub struct CodexLocalAccessState {
     pub model_ids: Vec<String>,
     pub last_error: Option<String>,
     pub member_count: usize,
+    pub upstream_sources: Vec<CodexLocalAccessUpstreamSource>,
     pub stats: CodexLocalAccessStats,
 }
 

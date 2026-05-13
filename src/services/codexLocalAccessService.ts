@@ -32,6 +32,8 @@ export async function createCodexLocalAccessApiKey(
   return await invoke('codex_local_access_create_api_key', {
     name: input.name,
     monthlyTokenLimit: input.monthlyTokenLimit,
+    upstreamScope: input.upstreamScope,
+    allowedAccountIds: input.allowedAccountIds,
   });
 }
 
@@ -44,7 +46,15 @@ export async function updateCodexLocalAccessApiKey(
     name: input.name,
     enabled: input.enabled,
     monthlyTokenLimit: input.monthlyTokenLimit,
+    upstreamScope: input.upstreamScope,
+    allowedAccountIds: input.allowedAccountIds,
   });
+}
+
+export async function setCodexLocalAccessDefaultApiKey(
+  apiKeyId: string,
+): Promise<CodexLocalAccessState> {
+  return await invoke('codex_local_access_set_default_api_key', { apiKeyId });
 }
 
 export async function rotateCodexLocalAccessApiKey(

@@ -125,6 +125,8 @@ import {
 } from "../components/SingleSelectFilterDropdown";
 import type { CodexAccount } from "../types/codex";
 import type {
+  CodexLocalAccessApiKey,
+  CodexLocalAccessCollection,
   CodexLocalAccessRoutingStrategy,
   CodexLocalAccessState,
 } from "../types/codexLocalAccess";
@@ -3730,6 +3732,28 @@ export function CodexAccountsPage() {
     );
   }, [localAccessCollection, localAccessState?.baseUrl]);
 
+  const resolveLocalAccessDefaultApiKey = useCallback(
+    (
+      collection?: CodexLocalAccessCollection | null,
+      options?: { requireUsable?: boolean },
+    ): CodexLocalAccessApiKey | null => {
+      if (!collection) return null;
+      const isUsable = (apiKey: CodexLocalAccessApiKey) =>
+        apiKey.enabled && apiKey.key.trim().length > 0;
+      const defaultApiKeyId = collection.defaultApiKeyId?.trim();
+      const defaultApiKey = defaultApiKeyId
+        ? collection.apiKeys.find(
+            (apiKey) => apiKey.id === defaultApiKeyId && isUsable(apiKey),
+          )
+        : null;
+      if (defaultApiKey) return defaultApiKey;
+      const firstUsableApiKey = collection.apiKeys.find(isUsable);
+      if (firstUsableApiKey) return firstUsableApiKey;
+      return options?.requireUsable ? null : (collection.apiKeys[0] ?? null);
+    },
+    [],
+  );
+
   const handleCopyLocalAccessValue = useCallback(
     async (field: "baseUrl" | "apiKey", value: string) => {
       try {
@@ -3821,8 +3845,8 @@ export function CodexAccountsPage() {
         const filteredAccountIds = accountIds.filter((accountId) => {
           const account = accountById.get(accountId);
           if (!account) return false;
-          if (isCodexApiKeyAccount(account)) return false;
           if (
+            !isCodexApiKeyAccount(account) &&
             restrictFreeAccounts &&
             isCodexExplicitFreePlanType(account.plan_type)
           ) {
@@ -4076,6 +4100,8 @@ export function CodexAccountsPage() {
   const handleCreateLocalAccessApiKey = useCallback(async (payload: {
     name: string;
     monthlyTokenLimit: number | null;
+    upstreamScope: 'all' | 'selected';
+    allowedAccountIds: string[];
   }) => {
     setLocalAccessSaving(true);
     try {
@@ -4100,6 +4126,8 @@ export function CodexAccountsPage() {
       name: string;
       enabled: boolean;
       monthlyTokenLimit: number | null;
+      upstreamScope: 'all' | 'selected';
+      allowedAccountIds: string[];
     },
   ) => {
     setLocalAccessSaving(true);
@@ -4117,6 +4145,23 @@ export function CodexAccountsPage() {
     } catch (error) {
       console.error("Failed to update local access api key:", error);
       throw new Error(String(error).replace(/^Error:\s*/, ""));
+    } finally {
+      setLocalAccessSaving(false);
+    }
+  }, [setMessage, t]);
+
+  const handleSetLocalAccessDefaultApiKey = useCallback(async (apiKeyId: string) => {
+    setLocalAccessSaving(true);
+    try {
+      const nextState = await codexLocalAccessService.setCodexLocalAccessDefaultApiKey(apiKeyId);
+      setLocalAccessState(nextState);
+      setMessage({
+        text: t('codex.localAccess.defaultApiKeyUpdateSuccess', 'API 服务默认密钥已更新'),
+      });
+      return nextState;
+    } catch (error) {
+      console.error('Failed to set local access default api key:', error);
+      throw new Error(String(error).replace(/^Error:\s*/, ''));
     } finally {
       setLocalAccessSaving(false);
     }
@@ -4304,7 +4349,9 @@ export function CodexAccountsPage() {
         t("codex.localAccess.testUnavailable", "当前 API 服务地址不可用"),
       );
     }
-    const testApiKey = localAccessCollection.apiKeys.find((apiKey) => apiKey.enabled)?.key;
+    const testApiKey = resolveLocalAccessDefaultApiKey(localAccessCollection, {
+      requireUsable: true,
+    })?.key.trim();
     if (!testApiKey) {
       throw new Error(t('codex.localAccess.apiKeyUnavailable', '当前没有可用的 API 服务密钥'));
     }
@@ -4356,7 +4403,7 @@ export function CodexAccountsPage() {
       }
       setLocalAccessTesting(false);
     }
-  }, [localAccessCollection, resolveLocalAccessBaseUrl, t]);
+  }, [localAccessCollection, resolveLocalAccessBaseUrl, resolveLocalAccessDefaultApiKey, t]);
 
   const handleActivateLocalAccess = useCallback(
     async (options?: { showSuccessMessage?: boolean }) => {
@@ -5400,10 +5447,7 @@ export function CodexAccountsPage() {
       ? true
       : localAccessDetailsExpanded;
     const baseUrl = resolveLocalAccessBaseUrl();
-    const activeLocalAccessApiKey =
-      localAccessCollection?.apiKeys.find((apiKey) => apiKey.enabled)
-      ?? localAccessCollection?.apiKeys[0]
-      ?? null;
+    const activeLocalAccessApiKey = resolveLocalAccessDefaultApiKey(localAccessCollection);
     const apiKeyDisplay = !activeLocalAccessApiKey
       ? CODEX_LOCAL_ACCESS_FALLBACK_API_KEY_MASK
       : localAccessKeyVisible
@@ -9485,6 +9529,7 @@ export function CodexAccountsPage() {
             onUpdateRoutingStrategy={handleUpdateLocalAccessRoutingStrategy}
             onCreateApiKey={handleCreateLocalAccessApiKey}
             onUpdateApiKey={handleUpdateLocalAccessApiKey}
+            onSetDefaultApiKey={handleSetLocalAccessDefaultApiKey}
             onRotateApiKey={handleRotateLocalAccessApiKey}
             onDeleteApiKey={handleDeleteLocalAccessApiKey}
             onKillPort={handleKillLocalAccessPort}
